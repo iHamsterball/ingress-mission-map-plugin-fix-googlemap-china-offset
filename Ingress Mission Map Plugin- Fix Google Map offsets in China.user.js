@@ -3,6 +3,7 @@
 // @name           Ingress Mission Map Plugin: Fix Google Map offsets in China
 // @version        0.1.20160728.2333
 // @namespace      https://github.com/ihamsterball/ingress-mission-map-plugin-fix-googlemap-china-offset
+// @downloadURL    https://github.com/iHamsterball/ingress-mission-map-plugin-fix-googlemap-china-offset/raw/master/Ingress%20Mission%20Map%20Plugin-%20Fix%20Google%20Map%20offsets%20in%20China.user.js
 // @description    Show correct Google Map for China user by applying offset tweaks.
 // @author         Cother
 // @include        http://ingressmm.com/*
@@ -207,7 +208,7 @@ function wrapper(plugin_info) {
                 }
             }
         }
-        return {lat: newLat, lng: newLng};
+        return { lat: newLat, lng: newLng };
     };
     // end GCJ-02 to WGS84 transformer
 
@@ -219,23 +220,23 @@ function wrapper(plugin_info) {
         // Update by Cother: There DO have offsets in hybrid maps, but currently
         // there isn't a proper way to fix the roads without changing satellite.
         if (type !== 'satellite' && type !== 'hybrid') {
-            console.log('Roadmap');
+            //console.log('Roadmap');
             var newPos = WGS84toGCJ02.transform(lat, lng);
             return new google.maps.LatLng(newPos.lat, newPos.lng);
         } else {
-            console.log('Satellite or Hybrid');
+            //console.log('Satellite or Hybrid');
             return new google.maps.LatLng(lat, lng);
         }
 
     };
 
-    window.plugin.fixChinaOffset.GCJ02toWGS84 = function(lat, lng, type) {
+    window.plugin.fixChinaOffset.GCJ02toWGS84 = function (lat, lng, type) {
         if (type !== 'satellite' && type !== 'hybrid') {
-            console.log('Roadmap');
+            //console.log('Roadmap');
             return GCJ02toWGS84.transform(lat, lng);
         } else {
-            console.log('Satellite or Hybrid');
-            return {lat: lat, lng: lng};
+            //console.log('Satellite or Hybrid');
+            return { lat: lat, lng: lng };
         }
     };
 
@@ -278,7 +279,7 @@ function wrapper(plugin_info) {
     // end overwrite set_portal function
 
     // overwrite toggle_mission function
-    function toggle_mission(id, move) {
+    toggle_mission = function (id, move) {
         var e = $(".mission[mission=" + id + "]");
         if (e.hasClass("focus")) {
             e.removeClass("focus");
@@ -332,7 +333,7 @@ function wrapper(plugin_info) {
                 });
         }
         $(".more_menu,.float_box").hide();
-    }
+    };
     // end overwrite toggle_mission function
 
     // overwrite update_mission function
@@ -354,7 +355,7 @@ function wrapper(plugin_info) {
                     sw: window.plugin.fixChinaOffset.GCJ02toWGS84(sw.lat(), sw.lng(), Map.mapTypeId)
                 }
             };
-            console.log(center,ne,sw);
+            console.log(center, ne, sw);
             if ($("#tab_view").hasClass("focus"))
                 update_map_link();
         }
@@ -437,8 +438,8 @@ function wrapper(plugin_info) {
                             faction: Mission[id].faction
                         });
                         m.find(".mission_on_intelmap").attr("href", "https://www.ingress.com/mission/" + Mission[id].code);
-                        m.find(".mission_on_googlemap").attr("href", "https://maps.google.com/maps?ll=" + Mission[id].latitude + "," + Mission[id].longitude);
-                        m.find(".mission_direction").attr("href", "https://maps.google.com/maps?daddr=" + Mission[id].latitude + "," + Mission[id].longitude + "&saddr=");
+                        m.find(".mission_on_googlemap").attr("href", "https://maps.google.com/maps?ll=" + latlng.lat() + "," + latlng.lng());
+                        m.find(".mission_direction").attr("href", "https://maps.google.com/maps?daddr=" + latlng.lat() + "," + latlng.lng() + "&saddr=");
                         m.find(".find_by_author").attr("href", "?find=" + encodeURIComponent(Mission[id].author) + "&findby=1");
                         m.find(".mission_detail").text(Mission[id].intro);
                         update_mission_summary(Mission[id]);
@@ -494,6 +495,18 @@ function wrapper(plugin_info) {
     };
     // end overwrite update_mission function
 
+    // overwrite update_map_link function
+    update_map_link = function () {
+        var center = Map.getCenter();
+        var zoom = Map.getZoom();
+        var center_fix = window.plugin.fixChinaOffset.GCJ02toWGS84(center.lat(), center.lng());
+        set_link("/?pos=" + center_fix.lat() + "," + center_fix.lng() + "&zoom=" + zoom);
+        $(".jump_intelmap_current").attr("href", "https://www.ingress.com/intel?ll=" + center_fix.lat + "," + center_fix.lng + "&z=" + zoom);
+        $(".jump_googlemap_current").attr("href", "https://maps.google.com/maps?ll=" + center_fix.lat + "," + center_fix.lng + "&z=" + zoom);
+    };
+    // end overwrite update_map_link function
+    // seems that this function is not used
+
     // overwrite move_current_pos function
     move_current_pos = function (pos) {
         console.log('Overwrited function is running...');
@@ -513,9 +526,9 @@ function wrapper(plugin_info) {
             }, function (err) {
                 d.reject();
             }, {
-                enableHighAccuracy: true,
-                timeout: 2e3
-            });
+                    enableHighAccuracy: true,
+                    timeout: 2e3
+                });
         d.done(function () {
             // modified
             var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(pos.coords.latitude, pos.coords.longitude, Map.mapTypeId);
@@ -541,6 +554,23 @@ function wrapper(plugin_info) {
     };
     // end overwrited move_current_pos function
 
+    // overwrite mission portal click function
+    $(".mission_portal").click(function (e) {
+        var e = $(e.currentTarget);
+        var pid = e.attr("portal");
+        var mid = e.parents(".mission").first().attr("mission");
+        inactivate_portal();
+        e.addClass("focus");
+        if (Mission[mid].portal[pid].length >= 3) {
+            var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(Mission[mid].portal[pid][2].latitude, Mission[mid].portal[pid][2].longitude);
+            Map.panTo(latlng);
+            set_portal(mid, pid, true);
+        }
+        $(".more_menu,.float_box").hide();
+        return false;
+    });
+    // end overwrite mission portal click function
+
     // PLUGIN END
 } // wrapper end
 // inject code into site context
@@ -549,4 +579,3 @@ var info = {};
 if (typeof GM_info !== 'undefined' && GM_info && GM_info.script) info.script = { version: GM_info.script.version, name: GM_info.script.name, description: GM_info.script.description };
 script.appendChild(document.createTextNode('(' + wrapper + ')(' + JSON.stringify(info) + ');'));
 (document.body || document.head || document.documentElement).appendChild(script);
-
