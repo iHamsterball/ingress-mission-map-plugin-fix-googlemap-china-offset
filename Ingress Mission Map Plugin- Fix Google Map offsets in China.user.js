@@ -500,7 +500,7 @@ function wrapper(plugin_info) {
         var center = Map.getCenter();
         var zoom = Map.getZoom();
         var center_fix = window.plugin.fixChinaOffset.GCJ02toWGS84(center.lat(), center.lng());
-        set_link("/?pos=" + center_fix.lat() + "," + center_fix.lng() + "&zoom=" + zoom);
+        set_link("/?pos=" + center_fix.lat + "," + center_fix.lng + "&zoom=" + zoom);
         $(".jump_intelmap_current").attr("href", "https://www.ingress.com/intel?ll=" + center_fix.lat + "," + center_fix.lng + "&z=" + zoom);
         $(".jump_googlemap_current").attr("href", "https://maps.google.com/maps?ll=" + center_fix.lat + "," + center_fix.lng + "&z=" + zoom);
     };
@@ -556,14 +556,19 @@ function wrapper(plugin_info) {
 
     // overwrite mission portal click function
     $(".mission_portal").click(function (e) {
+        console.log("Overwrited");
         var e = $(e.currentTarget);
         var pid = e.attr("portal");
         var mid = e.parents(".mission").first().attr("mission");
         inactivate_portal();
         e.addClass("focus");
         if (Mission[mid].portal[pid].length >= 3) {
-            var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(Mission[mid].portal[pid][2].latitude, Mission[mid].portal[pid][2].longitude);
-            Map.panTo(latlng);
+            var latlng_fix = window.plugin.fixChinaOffset.WGS84toGCJ02(Mission[mid].portal[pid][2].latitude, Mission[mid].portal[pid][2].longitude, Map.mapTypeId);
+            console.log("Unfixed", Mission[mid].portal[pid][2].latitude, Mission[mid].portal[pid][2].longitude);
+            console.log("Fixed", latlng_fix.lat(), latlng_fix.lng());
+            //var latlng = new google.maps.LatLng(Mission[mid].portal[pid][2].latitude, Mission[mid].portal[pid][2].longitude);
+            //console.log("Unfixed", latlng.lat(), latlng.lng());
+            Map.panTo(latlng_fix);
             set_portal(mid, pid, true);
         }
         $(".more_menu,.float_box").hide();
