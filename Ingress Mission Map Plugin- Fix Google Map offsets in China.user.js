@@ -28,7 +28,7 @@ function wrapper(plugin_info) {
     //     然而，由于政策原因，除卫星地图外，Google Map 在中国地图请求的坐标系统是 GCJ-02；
     //     因此，如果使用 GCJ-02 坐标系统来请求地图数据，就可以获取到正确的地图。
     //   2.
-    //     目前为止没有算法能够实现 GCJ-02 坐标系统向 WGS-84 的转换，
+    //     目前为止没有算法能够准确实现 GCJ-02 坐标系统向 WGS-84 的转换，
     //     但是从 WGS-84 向 GCJ-02 的转换已经有较为准确的算法可以实现。
     //   3.
     //     当 Ingress Mission Map 从 Google Map 请求数据的时候，DensityMarker 看起来并不
@@ -38,9 +38,8 @@ function wrapper(plugin_info) {
     // 从而使 Google Map 渲染正确的地图。
     //
     // Ingress 内的对象，例如 Portal 和任务起始点，也可以通过这样的坐标转换来修正其位置。
-    // 然而，刷新这些内容所使用的函数，需要获取到地图的边界等数据，然而这些数据已经是 GCJ-02 坐标系统的
-    // 坐标了，由于我们没有合适的方法进行转换，所以请求到的数据可能会不完整。
-    // （想象一下请求到数据之后，整体向右上方偏移，这样左下方就没有数据了）
+    // 在处理边界时，使用了一个由 GCJ-02 向 WGS-84 转换的算法，从而可以渲染完整地图。
+    // 该 GCJ-02 向 WGS-84 转换算法精度为 1e-6，误差为1~2m。
     //
     // Google Hybrid 地图，由于卫星地图是 WGS-84 坐标系统，因此卫星地图本身就是正确的。
     // 而道路使用的 GCJ-02 坐标系统，如果进行偏移，那么卫星地图也会受到影响。
@@ -50,8 +49,10 @@ function wrapper(plugin_info) {
     // https://on4wp7.codeplex.com/SourceControl/changeset/view/21483#353936
     // 由于这是机密文件，所以并没有官方算法。
     //
-    // 如果你有兴趣或想法来解决上面提到的两个问题，欢迎联系 Cother <ihamsterball@gmail.com>
-    // 希望能够一起改进该插件。
+    // GCJ-02 向 WGS-84 坐标系统转换的算法采用了二分的思路，因此相对于 WGS-84 向 GCJ-02 坐标
+    // 系统转换算法而言很慢，然而没办法，三角函数没有什么准确转回的方式。
+    //
+    // 如果你有兴趣或想法来帮助完善该插件，欢迎联系 Cother <ihamsterball@gmail.com>
     //
     // 此插件参照了 IITC 的同功能插件，并使用了其坐标转换和代码注入的代码。
     // 感谢原作者的努力。
@@ -76,20 +77,20 @@ function wrapper(plugin_info) {
     // So, here is the internal of the plugin:
     //
     // The plugin overwrites behaviours of the functions which involved map coordinate
-    // request, When users are dragging the map, these functions will pass offseted
+    // request, When users are dragging the map, these functions will pass offseted 
     // positions to Google Map APIs (WGS-84 to GCJ-02).
     // So Google Map APIs will render a correct map.
     //
     // The offset between Google maps and Ingress objects can also be fixed by applying
-    // WGS-84 to GCJ-02 transformation on Ingress objects. However we cannot simply know
-    // the requesting bounds of Ingress objects because we cannot transform GCJ-02 to
-    // WGS-84. As a result, the Ingress objects on maps would be incomplete.
+    // WGS-84 to GCJ-02 transformation on Ingress objects. With using a GCJ-02 to WGS-84
+    // transformation, it is posible to render a complete map.
+    // The GCJ-02 to WGS-84 transformation algorithm's accuracy is 1e-6, 1~2m on GPS.
     //
     // The algorithm of transforming WGS-84 to GCJ-02 comes from:
     // https://on4wp7.codeplex.com/SourceControl/changeset/view/21483#353936
     // There is no official algorithm because it is classified information.
     //
-    // If you have interest or idea to solve the above problems,
+    // If you have interest or idea to solve the above problems, 
     // welcome to contact Cother <ihamsterball@gmail.com>
     // Hope we can improve the plugin together.
     //
@@ -161,21 +162,81 @@ function wrapper(plugin_info) {
 
     var WGS84toGCJ02 = new WGS84transformer();
 
+    // begin GCJ-02 to WGS84 transformer
+    var GCJ02transformer = window.plugin.fixChinaOffset.GCJ02transformer = function () { };
 
-    window.plugin.fixChinaOffset.getLatLng = function (lat, lng, type) {
+    GCJ02transformer.prototype.transform = function (gcjLat, gcjLng) {
+        // newCoord = oldCoord = gcjCoord
+        var newLat = gcjLat, newLng = gcjLng;
+        var oldLat = newLat, oldLng = newLng;
+        var threshold = 1e-6; // ~0.55 m equator & latitude
+
+        var flag = true;
+        for (var i = 0; i < 30; i++) {
+            // oldCoord = newCoord
+            oldLat = newLat;
+            oldLng = newLng;
+            console.log(newLat, newLng);
+            // newCoord = gcjCoord - wgs_to_gcj_delta(newCoord)
+            var tmp = WGS84toGCJ02.transform(newLat, newLng);
+            console.log(tmp.lat, tmp.lng);
+            // approx difference using gcj-space difference
+            newLat -= gcjLat - tmp.lat;
+            newLng -= gcjLng - tmp.lng;
+            // diffchk
+            if (Math.max(Math.abs(oldLat - newLat), Math.abs(oldLng - newLng)) < threshold) {
+                flag = false;
+                break;
+            }
+        }
+        if (flag) {
+            for (i = 0; i < 30; i++) {
+                // oldCoord = newCoord
+                oldLat = newLat;
+                oldLng = newLng;
+                console.log(newLat, newLng);
+                // newCoord = gcjCoord - wgs_to_gcj_delta(newCoord)
+                var tmp2 = WGS84toGCJ02.transform(newLat, newLng);
+                console.log(tmp2.lat, tmp2.lng);
+                // approx difference using gcj-space difference
+                newLat += gcjLat - tmp2.lat;
+                newLng += gcjLng - tmp2.lng;
+                // diffchk
+                if (Math.max(Math.abs(oldLat - newLat), Math.abs(oldLng - newLng)) < threshold) {
+                    break;
+                }
+            }
+        }
+        return {lat: newLat, lng: newLng};
+    };
+    // end GCJ-02 to WGS84 transformer
+
+    var GCJ02toWGS84 = new GCJ02transformer();
+
+    window.plugin.fixChinaOffset.WGS84toGCJ02 = function (lat, lng, type) {
 
         // No offsets in satellite and hybrid maps
         // Update by Cother: There DO have offsets in hybrid maps, but currently
         // there isn't a proper way to fix the roads without changing satellite.
         if (type !== 'satellite' && type !== 'hybrid') {
-            console.log('Roadmap')
+            console.log('Roadmap');
             var newPos = WGS84toGCJ02.transform(lat, lng);
             return new google.maps.LatLng(newPos.lat, newPos.lng);
         } else {
-            console.log('Satellite or Hybrid')
+            console.log('Satellite or Hybrid');
             return new google.maps.LatLng(lat, lng);
         }
 
+    };
+
+    window.plugin.fixChinaOffset.GCJ02toWGS84 = function(lat, lng, type) {
+        if (type !== 'satellite' && type !== 'hybrid') {
+            console.log('Roadmap');
+            return GCJ02toWGS84.transform(lat, lng);
+        } else {
+            console.log('Satellite or Hybrid');
+            return {lat: lat, lng: lng};
+        }
     };
 
     // overwrite set_portal function
@@ -186,7 +247,7 @@ function wrapper(plugin_info) {
                 continue; var p = Mission[mid].portal[i];
             if (!p[0] && p.length >= 3) {
                 // modified
-                var latlng = window.plugin.fixChinaOffset.getLatLng(p[2].latitude, p[2].longitude, Map.mapTypeId);
+                var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(p[2].latitude, p[2].longitude, Map.mapTypeId);
 
                 // modified end
                 var icon = new google.maps.MarkerImage("img/p" + ("00" + (parseInt(i) + 1)).substr(-2) + (focus ? "f" : "n") + ".png", new google.maps.Size(32, 32), new google.maps.Point(0, 0), new google.maps.Point(16, 16));
@@ -199,7 +260,7 @@ function wrapper(plugin_info) {
                 });
                 p[2].marker.setMap(Map);
                 // modified
-                coordinates.push(window.plugin.fixChinaOffset.getLatLng(p[2].latitude, p[2].longitude, Map.mapTypeId))
+                coordinates.push(window.plugin.fixChinaOffset.WGS84toGCJ02(p[2].latitude, p[2].longitude, Map.mapTypeId));
 
                 // modified end
             }
@@ -211,9 +272,9 @@ function wrapper(plugin_info) {
                 strokeOpacity: Mission[mid].sequence == 1 ? .5 : .4,
                 strokeWeight: 8
             });
-            Mission[mid].polyline.setMap(Map)
+            Mission[mid].polyline.setMap(Map);
         }
-    }
+    };
     // end overwrite set_portal function
 
     // overwrite toggle_mission function
@@ -224,7 +285,7 @@ function wrapper(plugin_info) {
             inactivate_mission(id);
             if ($("#tab_view").hasClass("focus") && $(".mission.focus").length == 0 && is_center_move()) {
                 update_mission();
-                return
+                return;
             }
         } else {
             e.addClass("focus");
@@ -233,7 +294,7 @@ function wrapper(plugin_info) {
             $("#detail_info_icon_small").css("background-image", Mission[id].code ? "url(https://ingressmm.com/icon/" + Mission[id].code + ".jpg)" : "");
             $("#detail_area").removeClass("hide");
             // modified
-            var latlng = window.plugin.fixChinaOffset.getLatLng(Mission[id].latitude, Mission[id].longitude, Map.mapTypeId);
+            var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(Mission[id].latitude, Mission[id].longitude, Map.mapTypeId);
 
             // modified end
             if (move)
@@ -263,14 +324,14 @@ function wrapper(plugin_info) {
                                     var task = Mission[id].portal[i][0] ? "Complete objectives to unlock" : task_list[Mission[id].portal[i][1]];
                                     e = e.clone(true).attr("portal", i).insertAfter(e).show().find(".portal_name").html(Mission[id].portal[i][0] ? "<span class='portal_hidden'>" + name + "</span>" : name).attr("title", name).end().find(".portal_task").html(task).attr("title", task).end().find(".portal_marker").css("background-image", "url(img/p" + ("00" + (parseInt(i) + 1)).substr(-2) + "n.png)").end().find(".portal_marker.focus").css("background-image", "url(img/p" + ("00" + (parseInt(i) + 1)).substr(-2) + "f.png)").end();
                                     if (Mission[id].portal[i].length >= 3) {
-                                        e.find(".portal_on_googlemap").attr("href", "https://maps.google.com/maps?ll=" + Mission[id].portal[i][2].latitude + "," + Mission[id].portal[i][2].longitude).end().find(".portal_on_intelmap").attr("href", "https://www.ingress.com/intel?ll=" + Mission[id].portal[i][2].latitude + "," + Mission[id].portal[i][2].longitude + "&pll=" + Mission[id].portal[i][2].latitude + "," + Mission[id].portal[i][2].longitude).end().find(".portal_direction").attr("href", "https://maps.google.com/maps?daddr=" + Mission[id].portal[i][2].latitude + "," + Mission[id].portal[i][2].longitude + "&saddr=").end()
+                                        e.find(".portal_on_googlemap").attr("href", "https://maps.google.com/maps?ll=" + Mission[id].portal[i][2].latitude + "," + Mission[id].portal[i][2].longitude).end().find(".portal_on_intelmap").attr("href", "https://www.ingress.com/intel?ll=" + Mission[id].portal[i][2].latitude + "," + Mission[id].portal[i][2].longitude + "&pll=" + Mission[id].portal[i][2].latitude + "," + Mission[id].portal[i][2].longitude).end().find(".portal_direction").attr("href", "https://maps.google.com/maps?daddr=" + Mission[id].portal[i][2].latitude + "," + Mission[id].portal[i][2].longitude + "&saddr=").end();
                                     }
                                 }
                         }
                     }
-                })
+                });
         }
-        $(".more_menu,.float_box").hide()
+        $(".more_menu,.float_box").hide();
     }
     // end overwrite toggle_mission function
 
@@ -287,23 +348,15 @@ function wrapper(plugin_info) {
             var ne = bounds.getNorthEast();
             var sw = bounds.getSouthWest();
             param = {
-                center: {
-                    lat: center.lat(),
-                    lng: center.lng()
-                },
+                center: window.plugin.fixChinaOffset.GCJ02toWGS84(center.lat(), center.lng(), Map.mapTypeId),
                 bounds: {
-                    ne: {
-                        lat: ne.lat(),
-                        lng: ne.lng()
-                    },
-                    sw: {
-                        lat: sw.lat(),
-                        lng: sw.lng()
-                    }
+                    ne: window.plugin.fixChinaOffset.GCJ02toWGS84(ne.lat(), ne.lng(), Map.mapTypeId),
+                    sw: window.plugin.fixChinaOffset.GCJ02toWGS84(sw.lat(), sw.lng(), Map.mapTypeId)
                 }
             };
+            console.log(center,ne,sw);
             if ($("#tab_view").hasClass("focus"))
-                update_map_link()
+                update_map_link();
         }
         if (!(param.new > 0))
             clear_mission();
@@ -323,22 +376,22 @@ function wrapper(plugin_info) {
                     for (i in data.count) {
                         var c = data.count[i];
                         var density = new DensityMarker(c.lat, c.lng, data.grid / 2 * (.5 + .5 * Math.min(1, c.count / 100)), c.count);
-                        density.setMap(Map)
+                        density.setMap(Map);
                     }
                     for (i in data.mission) {
                         if (data && data.bounds && (data.mission[i].latitude < data.bounds.sw.lat || data.mission[i].latitude > data.bounds.ne.lat || data.mission[i].longitude < data.bounds.sw.lng || data.mission[i].longitude > data.bounds.ne.lng))
                             continue; MissionIdx.push(data.mission[i].id);
                         Mission[data.mission[i].id] = data.mission[i];
                         if (lastNewMissionId == 0 || data.mission[i].id < lastNewMissionId)
-                            lastNewMissionId = data.mission[i].id
+                            lastNewMissionId = data.mission[i].id;
                     }
                     if (data.find)
                         MissionIdx.sort(function (a, b) {
-                            return Mission[b].name < Mission[a].name ? 1 : -1
+                            return Mission[b].name < Mission[a].name ? 1 : -1;
                         });
                     else
                         MissionIdx.sort(function (a, b) {
-                            return Mission[a].distance - Mission[b].distance + (Mission[a].index - Mission[b].index)
+                            return Mission[a].distance - Mission[b].distance + (Mission[a].index - Mission[b].index);
                         });
                     var count = 0;
                     if (param.find) {
@@ -351,7 +404,7 @@ function wrapper(plugin_info) {
                         for (var i in author)
                             $("<option>").appendTo($("#filter_author")).text(author[i]);
                         update_find_custom();
-                        check_medal_art()
+                        check_medal_art();
                     }
                     var _author = {};
                     for (var i in MissionIdx) {
@@ -361,7 +414,7 @@ function wrapper(plugin_info) {
                         if (param.find)
                             _author[Mission[id].author] = true;
                         // modified
-                        var latlng = window.plugin.fixChinaOffset.getLatLng(Mission[id].latitude, Mission[id].longitude, Map.mapTypeId);
+                        var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(Mission[id].latitude, Mission[id].longitude, Map.mapTypeId);
 
                         // modified end
                         var icon = get_icon(Mission[id]);
@@ -389,7 +442,7 @@ function wrapper(plugin_info) {
                         m.find(".find_by_author").attr("href", "?find=" + encodeURIComponent(Mission[id].author) + "&findby=1");
                         m.find(".mission_detail").text(Mission[id].intro);
                         update_mission_summary(Mission[id]);
-                        count++
+                        count++;
                     }
                     resize_screen();
                     $("#mission_total_count").text(data.total);
@@ -397,7 +450,7 @@ function wrapper(plugin_info) {
                         var num = $("#mission_list .mission:visible").length;
                         $("#new_preview_count").text(num);
                         if (num < data.total)
-                            $("#mission_list_end").addClass("more").removeClass("mission_list_loading")
+                            $("#mission_list_end").addClass("more").removeClass("mission_list_loading");
                     }
                     if (move && count > 0)
                         if (data.find && count > 1) {
@@ -411,61 +464,61 @@ function wrapper(plugin_info) {
                                     ne = {
                                         lat: Mission[i].latitude,
                                         lng: Mission[i].longitude
-                                    }
+                                    };
                                 } else {
                                     sw.lat = Math.min(sw.lat, Mission[i].latitude);
                                     sw.lng = Math.min(sw.lng, Mission[i].longitude);
                                     ne.lat = Math.max(ne.lat, Mission[i].latitude);
-                                    ne.lng = Math.max(ne.lng, Mission[i].longitude)
+                                    ne.lng = Math.max(ne.lng, Mission[i].longitude);
                                 }
                             if (typeof sw != "undefined") {
                                 // modified
-                                var ll_sw = window.plugin.fixChinaOffset.getLatLng(sw.lat, sw.lng, Map.mapTypeId);
-                                var ll_ne = window.plugin.fixChinaOffset.getLatLng(ne.lat, ne.lng, Map.mapTypeId);
+                                var ll_sw = window.plugin.fixChinaOffset.WGS84toGCJ02(sw.lat, sw.lng, Map.mapTypeId);
+                                var ll_ne = window.plugin.fixChinaOffset.WGS84toGCJ02(ne.lat, ne.lng, Map.mapTypeId);
 
                                 // modified end
                                 bounds = new google.maps.LatLngBounds(ll_sw, ll_ne);
                                 Map.panToBounds(bounds);
-                                Map.fitBounds(bounds)
+                                Map.fitBounds(bounds);
                             }
                         } else {
                             // modified
-                            var latlng = window.plugin.fixChinaOffset.getLatLng(Mission[MissionIdx[0]].latitude, Mission[MissionIdx[0]].longitude, Map.mapTypeId);
+                            var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(Mission[MissionIdx[0]].latitude, Mission[MissionIdx[0]].longitude, Map.mapTypeId);
 
                             // modified end
-                            Map.panTo(latlng)
+                            Map.panTo(latlng);
                         }
                 }
             }
-        })
-    }
+        });
+    };
     // end overwrite update_mission function
 
     // overwrite move_current_pos function
     move_current_pos = function (pos) {
-        console.log('Overwrited function is running...')
+        console.log('Overwrited function is running...');
         var d = $.Deferred();
         if (pos && typeof pos.coords != "undefined") {
             $(".mission_direction,.portal_direction").show();
-            d.resolve()
+            d.resolve();
         } else
             navigator.geolocation.getCurrentPosition(function (_pos) {
                 pos = _pos;
                 d.resolve();
                 // modified
-                var latlng = window.plugin.fixChinaOffset.getLatLng(pos.coords.latitude, pos.coords.longitude, Map.mapTypeId);
+                var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(pos.coords.latitude, pos.coords.longitude, Map.mapTypeId);
 
                 // modified end
-                Map.panTo(latlng)
+                Map.panTo(latlng);
             }, function (err) {
-                d.reject()
+                d.reject();
             }, {
                 enableHighAccuracy: true,
                 timeout: 2e3
             });
         d.done(function () {
             // modified
-            var latlng = window.plugin.fixChinaOffset.getLatLng(pos.coords.latitude, pos.coords.longitude, Map.mapTypeId);
+            var latlng = window.plugin.fixChinaOffset.WGS84toGCJ02(pos.coords.latitude, pos.coords.longitude, Map.mapTypeId);
 
             // modified end
             if (!currentPosMarker) {
@@ -481,11 +534,11 @@ function wrapper(plugin_info) {
                     position: latlng,
                     icon: icon
                 });
-                currentPosMarker.setMap(Map)
+                currentPosMarker.setMap(Map);
             }
-            currentPosMarker.setPosition(latlng)
-        })
-    }
+            currentPosMarker.setPosition(latlng);
+        });
+    };
     // end overwrited move_current_pos function
 
     // PLUGIN END
@@ -496,3 +549,4 @@ var info = {};
 if (typeof GM_info !== 'undefined' && GM_info && GM_info.script) info.script = { version: GM_info.script.version, name: GM_info.script.name, description: GM_info.script.description };
 script.appendChild(document.createTextNode('(' + wrapper + ')(' + JSON.stringify(info) + ');'));
 (document.body || document.head || document.documentElement).appendChild(script);
+
